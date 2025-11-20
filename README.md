@@ -21,7 +21,7 @@ cd repo
 git push origin master
 ```
 
-### 3. ToDo
+### 3. Outstanding Feature Requests
 
 - Add configuration options
     - Repo TTL

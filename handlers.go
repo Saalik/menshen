@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/cgi"
 	"os"
@@ -10,10 +9,17 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
+type Server struct {
+	Config *Config
+	Logger *zap.Logger
+}
+
 // handleCreate creates a new temporary git repository.
-func handleCreate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -22,14 +28,14 @@ func handleCreate(w http.ResponseWriter, r *http.Request) {
 	hash, err := GenerateHash()
 	if err != nil {
 		http.Error(w, "Failed to generate hash", http.StatusInternalServerError)
-		log.Printf("Error generating hash: %v", err)
+		s.Logger.Error("Error generating hash", zap.Error(err))
 		return
 	}
 
 	repoPath := GetRepoPath(hash)
 	if err := os.MkdirAll(repoPath, 0755); err != nil {
 		http.Error(w, "Failed to create repo directory", http.StatusInternalServerError)
-		log.Printf("Error creating directory %s: %v", repoPath, err)
+		s.Logger.Error("Error creating directory", zap.String("path", repoPath), zap.Error(err))
 		return
 	}
 
@@ -38,7 +44,7 @@ func handleCreate(w http.ResponseWriter, r *http.Request) {
 	cmd.Dir = repoPath
 	if output, err := cmd.CombinedOutput(); err != nil {
 		http.Error(w, "Failed to initialize git repo", http.StatusInternalServerError)
-		log.Printf("Error running git init in %s: %v, output: %s", repoPath, err, string(output))
+		s.Logger.Error("Error running git init", zap.String("path", repoPath), zap.Error(err), zap.String("output", string(output)))
 		return
 	}
 
@@ -47,23 +53,24 @@ func handleCreate(w http.ResponseWriter, r *http.Request) {
 	cmd.Dir = repoPath
 	if output, err := cmd.CombinedOutput(); err != nil {
 		http.Error(w, "Failed to configure git repo", http.StatusInternalServerError)
-		log.Printf("Error configuring git repo in %s: %v, output: %s", repoPath, err, string(output))
+		s.Logger.Error("Error configuring git repo", zap.String("path", repoPath), zap.Error(err), zap.String("output", string(output)))
 		return
 	}
 
 	url := fmt.Sprintf("https://%s/%s", r.Host, hash)
 
+	s.Logger.Info("Created new repo", zap.String("hash", hash))
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "%s\n", url)
 }
 
 // handleGit proxies git requests to git-http-backend.
-func handleGit(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGit(w http.ResponseWriter, r *http.Request) {
 	// Extract the hash from the URL path.
 	// Expected format: /<hash>/...
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	if len(parts) < 1 {
-		log.Printf("Invalid path: %s", r.URL.Path)
+		s.Logger.Debug("Invalid path", zap.String("path", r.URL.Path))
 		http.NotFound(w, r)
 		return
 	}
@@ -71,7 +78,7 @@ func handleGit(w http.ResponseWriter, r *http.Request) {
 
 	repoPath := GetRepoPath(hash)
 	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
-		log.Printf("Repo not found: %s (hash: %s)", repoPath, hash)
+		s.Logger.Debug("Repo not found", zap.String("path", repoPath), zap.String("hash", hash))
 		http.NotFound(w, r)
 		return
 	}
@@ -100,5 +107,70 @@ func handleGit(w http.ResponseWriter, r *http.Request) {
 	absRepoStore := filepath.Join(cwd, RepoStore)
 	handler.Env[0] = "GIT_PROJECT_ROOT=" + absRepoStore
 
+	s.Logger.Debug("Proxying git request", zap.String("hash", hash), zap.String("path", r.URL.Path))
 	handler.ServeHTTP(w, r)
+}
+
+func (s *Server) handleTTL(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "%s\n", s.Config.TTL)
+}
+
+func (s *Server) handleRepoTTL(w http.ResponseWriter, r *http.Request) {
+	// Expected format: /ttl/<hash>
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/ttl/"), "/")
+	if len(parts) < 1 || parts[0] == "" {
+		http.Error(w, "Invalid repo hash", http.StatusBadRequest)
+		return
+	}
+	hash := parts[0]
+
+	repoPath := GetRepoPath(hash)
+	info, err := os.Stat(repoPath)
+	if os.IsNotExist(err) {
+		http.NotFound(w, r)
+		return
+	} else if err != nil {
+		s.Logger.Error("Error stating repo", zap.String("path", repoPath), zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	elapsed := time.Since(info.ModTime())
+	remaining := s.Config.TTL - elapsed
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	fmt.Fprintf(w, "%s\n", remaining)
+}
+
+func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Expected format: /delete/<hash>
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/delete/"), "/")
+	if len(parts) < 1 || parts[0] == "" {
+		http.Error(w, "Invalid repo hash", http.StatusBadRequest)
+		return
+	}
+	hash := parts[0]
+
+	repoPath := GetRepoPath(hash)
+	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := os.RemoveAll(repoPath); err != nil {
+		s.Logger.Error("Error deleting repo", zap.String("path", repoPath), zap.Error(err))
+		http.Error(w, "Failed to delete repo", http.StatusInternalServerError)
+		return
+	}
+
+	s.Logger.Info("Deleted repo", zap.String("hash", hash))
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "Repository deleted")
 }

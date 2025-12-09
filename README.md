@@ -21,14 +21,28 @@ cd repo
 git push origin master
 ```
 
-### 3. ToDo
+### 3. Check TTL
+```bash
+# Get global TTL
+curl <your-service-url>/ttl
 
-- Add configuration options
-    - Repo TTL
-    - Port
-- Add metrics
-- Add proper logging
-- Add route /ttl to get the TTL of a repository
-- Add route /ttl/<hash> to get the TTL of a repository
-- Add rate limiting
-- Add route /delete/<hash> to delete a repository
+# Get remaining TTL for a repository
+curl <your-service-url>/ttl/<hash>
+```
+
+### 4. Delete a Repository
+```bash
+curl -X DELETE <your-service-url>/delete/<hash>
+```
+
+## Configuration
+
+Create a `config.yaml` file:
+
+```yaml
+port: 8080
+ttl: 48h
+```
+
+## ToDo
+

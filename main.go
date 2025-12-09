@@ -3,26 +3,43 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
+
+	"go.uber.org/zap"
 )
 
 func main() {
+	cfg, err := LoadConfig("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	logger, err := InitLogger(cfg.LogLevel)
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer logger.Sync()
+
 	if err := EnsureRepoStore(); err != nil {
-		log.Fatalf("Failed to ensure repo store: %v", err)
+		logger.Fatal("Failed to ensure repo store", zap.Error(err))
 	}
 
-	startCleanupTask()
+	startCleanupTask(cfg.TTL, logger)
 
-	http.HandleFunc("/new", handleCreate)
-	http.HandleFunc("/", handleGit)
+	server := &Server{Config: cfg, Logger: logger}
+	rateLimiter := NewRateLimiter(cfg.RateLimits, logger)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ttl", server.handleTTL)
+	mux.HandleFunc("/ttl/", server.handleRepoTTL)
+	mux.HandleFunc("/delete/", server.handleDelete)
+	mux.HandleFunc("/new", server.handleCreate)
+	mux.HandleFunc("/", server.handleGit)
+	mux.Handle("/metrics", MetricsHandler())
 
-	log.Printf("Menshen listening on port %s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	handler := rateLimiter.Middleware(mux)
+
+	logger.Info("Menshen listening", zap.String("port", cfg.Port))
+	if err := http.ListenAndServe(":"+cfg.Port, handler); err != nil {
+		logger.Fatal("Server failed", zap.Error(err))
 	}
 }

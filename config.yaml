@@ -1,0 +1,7 @@
+port: 8080
+ttl: 48h
+rate_limits:
+  global: 0 # Unlimited
+  repo: 0   # Unlimited
+log_level: info
+

@@ -1,31 +1,31 @@
 package main
 
 import (
-	"log"
 	"os"
 	"path/filepath"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const (
 	CleanupInterval = 1 * time.Hour
-	RepoTTL         = 48 * time.Hour
 )
 
 // startCleanupTask starts the background cleanup routine.
-func startCleanupTask() {
+func startCleanupTask(ttl time.Duration, logger *zap.Logger) {
 	ticker := time.NewTicker(CleanupInterval)
 	go func() {
 		for range ticker.C {
-			cleanupRepos()
+			cleanupRepos(ttl, logger)
 		}
 	}()
 }
 
-func cleanupRepos() {
+func cleanupRepos(ttl time.Duration, logger *zap.Logger) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		log.Printf("Error getting cwd for cleanup: %v", err)
+		logger.Error("Error getting cwd for cleanup", zap.Error(err))
 		return
 	}
 	repoStorePath := filepath.Join(cwd, RepoStore)
@@ -45,14 +45,14 @@ func cleanupRepos() {
 		repoPath := filepath.Join(repoStorePath, entry.Name())
 		info, err := entry.Info()
 		if err != nil {
-			log.Printf("Error getting info for %s: %v", repoPath, err)
+			logger.Error("Error getting info for repo", zap.String("path", repoPath), zap.Error(err))
 			continue
 		}
 
-		if now.Sub(info.ModTime()) > RepoTTL {
-			log.Printf("Deleting expired repo: %s", entry.Name())
+		if now.Sub(info.ModTime()) > ttl {
+			logger.Info("Deleting expired repo", zap.String("name", entry.Name()))
 			if err := os.RemoveAll(repoPath); err != nil {
-				log.Printf("Error deleting repo %s: %v", repoPath, err)
+				logger.Error("Error deleting repo", zap.String("path", repoPath), zap.Error(err))
 			}
 		}
 	}

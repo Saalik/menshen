@@ -72,7 +72,7 @@ func main() {
 	handlerWithCORS := corsMiddleware(handler)
 
 	logger.Info("Menshen listening", zap.String("port", cfg.Port))
-	
+
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: handlerWithCORS,

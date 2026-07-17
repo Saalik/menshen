@@ -28,9 +28,20 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 func main() {
-	cfg, err := LoadConfig("config.yaml")
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+	var cfg *Config
+	var err error
+
+	configPaths := []string{"config.yaml", "/etc/menshen/config.yaml"}
+	for _, path := range configPaths {
+		cfg, err = LoadConfig(path)
+		if err == nil {
+			log.Printf("Loaded config from %s", path)
+			break
+		}
+	}
+
+	if cfg == nil {
+		log.Fatalf("Failed to load config from any of the standard paths: %v", err)
 	}
 
 	logger, err := InitLogger(cfg.LogLevel)

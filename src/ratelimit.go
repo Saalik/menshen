@@ -81,7 +81,7 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 			if len(parts) > 0 {
 				hash = parts[0]
 			}
-		} else if path != "/new" && path != "/metrics" && path != "/ttl" {
+		} else if path != "/new" && !strings.HasPrefix(path, "/new/") && path != "/metrics" && path != "/ttl" {
 			// Assume it's a git request /<hash>/...
 			parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 			if len(parts) > 0 {
@@ -113,6 +113,8 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 			} else {
 				metricPath = "/:hash"
 			}
+		} else if strings.HasPrefix(path, "/new/") && path != "/new/" {
+			metricPath = "/new/:name"
 		}
 
 		httpRequestsTotal.WithLabelValues(r.Method, metricPath, strconv.Itoa(rw.status)).Inc()

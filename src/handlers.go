@@ -25,14 +25,34 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := GenerateHash()
-	if err != nil {
-		http.Error(w, "Failed to generate hash", http.StatusInternalServerError)
-		s.Logger.Error("Error generating hash", zap.Error(err))
+	var hash string
+	if r.URL.Path == "/new" || r.URL.Path == "/new/" {
+		var err error
+		hash, err = GenerateHash()
+		if err != nil {
+			http.Error(w, "Failed to generate hash", http.StatusInternalServerError)
+			s.Logger.Error("Error generating hash", zap.Error(err))
+			return
+		}
+	} else if strings.HasPrefix(r.URL.Path, "/new/") {
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/new/"), "/")
+		if len(parts) > 0 && parts[0] != "" {
+			hash = parts[0]
+		}
+	}
+
+	if hash == "" || strings.Contains(hash, "/") || strings.Contains(hash, "\\") || hash == "." || hash == ".." {
+		http.Error(w, "Invalid repository name", http.StatusBadRequest)
 		return
 	}
 
 	repoPath := GetRepoPath(hash)
+
+	// Return error if repository already exists
+	if _, err := os.Stat(repoPath); !os.IsNotExist(err) {
+		http.Error(w, "Repository already exists", http.StatusConflict)
+		return
+	}
 	if err := os.MkdirAll(repoPath, 0755); err != nil {
 		http.Error(w, "Failed to create repo directory", http.StatusInternalServerError)
 		s.Logger.Error("Error creating directory", zap.String("path", repoPath), zap.Error(err))
@@ -57,6 +77,23 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Write pre-receive hook for disk quota
+	if s.Config.MaxRepoSizeMB > 0 {
+		hookPath := filepath.Join(repoPath, "hooks", "pre-receive")
+		hookScript := fmt.Sprintf(`#!/bin/sh
+MAX_SIZE_KB=%d
+SIZE=$(du -sk . | cut -f1)
+if [ "$SIZE" -gt "$MAX_SIZE_KB" ]; then
+    echo "ERROR: Repository size limit (%d MB) exceeded." >&2
+    exit 1
+fi
+exit 0
+`, s.Config.MaxRepoSizeMB*1024, s.Config.MaxRepoSizeMB)
+		if err := os.WriteFile(hookPath, []byte(hookScript), 0755); err != nil {
+			s.Logger.Error("Error writing pre-receive hook", zap.Error(err))
+		}
+	}
+
 	url := fmt.Sprintf("https://%s/%s", r.Host, hash)
 
 	s.Logger.Info("Created new repo", zap.String("hash", hash))
@@ -66,6 +103,11 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 // handleGit proxies git requests to git-http-backend.
 func (s *Server) handleGit(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" && r.Method == http.MethodGet {
+		s.handleFrontend(w, r)
+		return
+	}
+
 	// Extract the hash from the URL path.
 	// Expected format: /<hash>/...
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")

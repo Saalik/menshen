@@ -4,4 +4,5 @@ rate_limits:
   global: 0 # Unlimited
   repo: 0   # Unlimited
 log_level: info
+max_repo_size_mb: 50
 

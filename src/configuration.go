@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	Port       string        `yaml:"port"`
-	TTL        time.Duration `yaml:"ttl"`
-	RateLimits RateLimits    `yaml:"rate_limits"`
-	LogLevel   string        `yaml:"log_level"`
+	Port          string        `yaml:"port"`
+	TTL           time.Duration `yaml:"ttl"`
+	RateLimits    RateLimits    `yaml:"rate_limits"`
+	LogLevel      string        `yaml:"log_level"`
+	MaxRepoSizeMB int           `yaml:"max_repo_size_mb"`
 }
 
 type RateLimits struct {
